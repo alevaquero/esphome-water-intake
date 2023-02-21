@@ -1,0 +1,577 @@
+esphome:
+  name: water-intake
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "qGWTC3Ax4U8W+VFjB4+DQ3G4IqkC9mblJCYcqbYod3E="
+
+ota:
+  password: "77de647c9b7873a5a529f14c9e01e22f"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+time:
+  - platform: homeassistant
+    id: ntp
+    on_time:
+      # Reset every day at midnight
+      - seconds: 0
+        minutes: 0
+        hours: 0
+        then:
+          - globals.set:
+              id: daily_intake
+              value: '0'
+          - globals.set:
+              id: current_cup
+              value: '0'
+          - if:
+              condition:
+                lambda: "return id(cup_level) == 0;" # container not in scale
+              then:
+                - globals.set:
+                    id: cup_left_yesterday
+                    value: 'false'
+                - globals.set:
+                    id: previous_scale_value
+                    value: '0'
+              else:
+                - globals.set:
+                    id: cup_left_yesterday
+                    value: 'true'
+
+      # Go to sleep until 6am after reset
+      - seconds: 0
+        minutes: 10
+        hours: 0
+        then:
+          - globals.set:
+              id: clean_screen_state
+              value: '0'
+          - display.page.show: clean_page
+          - component.update: my_display
+          - deep_sleep.enter:
+              id: deep_sleep_1
+              until: "06:00:00"
+              time_id: ntp
+    
+binary_sensor:
+  - platform: gpio
+    pin: 
+      number: GPIO19
+      inverted: true
+    id: display_busy
+    on_press:
+      then:
+        - globals.set:
+              id: refresh_start
+              value: !lambda 'return millis();'
+    on_release:
+      then:
+        - if:
+            # refresh the display if a click happen while refreshing
+            condition:
+              lambda: 'return id(last_press) > id(refresh_start);'
+            then:
+              - component.update: my_display
+            
+  - platform: gpio
+    id: sel
+    pin: 
+      number: GPIO26
+      mode:
+        input: true
+        pullup: true
+    on_press:
+      then:
+        - logger.log: "Select Clicked"
+        - if:
+            condition:
+              display.is_displaying_page: main_page
+            then:
+              - display.page.show: settings_page
+            else:
+              - if:
+                  condition:
+                    display.is_displaying_page: settings_page
+                  then:
+                    # In settings page
+                    - if:
+                        condition:
+                          # Back
+                          lambda: "return id(menu_index) == 3;"
+                        then:
+                          - display.page.show: main_page
+                    - if:
+                        condition:
+                          # Clean Screen
+                          lambda: "return id(menu_index) == 2;"
+                        then:
+                          - globals.set:
+                              id: clean_screen_state
+                              value: '0'
+                          - display.page.show: clean_page
+                          - while:
+                              condition:
+                                display.is_displaying_page: clean_page
+                              then:
+                                - component.update: my_display
+                                - delay: 30s
+                                - globals.set:
+                                    id: clean_screen_state
+                                    value: '1'    
+                                - component.update: my_display    
+                                - delay: 0.5s
+                                - globals.set:
+                                    id: clean_screen_state
+                                    value: '0'                               
+                    - if:
+                        condition:
+                          # Set empty container weight
+                          lambda: "return id(menu_index) == 0;"
+                        then:
+                          - globals.set:
+                              id: settings_message
+                              value: '"Place the empty container."'
+                          - globals.set:
+                              id: menu_index
+                              value: '-1'
+                          - component.update: my_display
+                          - delay: 10s
+                          - globals.set:
+                              id: settings_message
+                              value: '""'
+                          - globals.set:
+                              id: empty_weight
+                              value: !lambda 'return id(scale).state;'
+                          - globals.set:
+                              id: menu_index
+                              value: '0'
+                    - if:
+                        condition:
+                          # Set full container weight
+                          lambda: "return id(menu_index) == 1;"
+                        then:
+                          - globals.set:
+                              id: settings_message
+                              value: '"Place the full container."'
+                          - globals.set:
+                              id: menu_index
+                              value: '-1'
+                          - component.update: my_display
+                          - delay: 10s
+                          - globals.set:
+                              id: settings_message
+                              value: '""'
+                          - globals.set:
+                              id: full_weight
+                              value: !lambda 'return id(scale).state;'
+                          - globals.set:
+                              id: menu_index
+                              value: '1'
+                  else:
+                    # In clean page
+                    - display.page.show: settings_page
+        - globals.set:
+                id: last_press
+                value: !lambda 'return millis();'
+        - component.update: my_display
+  - platform: gpio
+    id: up
+    pin: 
+      number: GPIO27
+      mode:
+        input: true
+        pullup: true
+    on_press:
+      then:
+        - logger.log: "Up Clicked"
+        - if:
+            condition:
+              display.is_displaying_page: settings_page
+            then:
+              - lambda: |-
+                  id(menu_index) -= 1;
+                  if (id(menu_index) < 0) {
+                    id(menu_index) = 3;
+                  }
+        - if:
+            condition:
+              display.is_displaying_page: main_page
+            then:
+              # Add 100ml
+              - globals.set:
+                  id: daily_intake
+                  value: !lambda 'return id(daily_intake) + 100;'
+        - globals.set:
+                id: last_press
+                value: !lambda 'return millis();'
+        - component.update: my_display
+  - platform: gpio
+    id: down
+    pin: 
+      number: GPIO14
+      mode:
+        input: true
+        pullup: true
+    on_press:
+      then:
+        - logger.log: "Down Clicked"
+        - if:
+            condition:
+              display.is_displaying_page: settings_page
+            then:
+              - lambda: |-
+                  id(menu_index) += 1;
+                  if (id(menu_index) > 3) {
+                    id(menu_index) = 0;
+                  }
+        - if:
+            condition:
+              display.is_displaying_page: main_page
+            then:
+              # Substract 100ml
+              - globals.set:
+                  id: daily_intake
+                  value: !lambda 'return id(daily_intake) - 100;'
+        - globals.set:
+                id: last_press
+                value: !lambda 'return millis();'
+        - component.update: my_display
+
+font:
+  - file: "fonts/Roboto-Medium.ttf"
+    id: roboto_small
+    size: 25
+  - file: "fonts/Roboto-Medium.ttf"
+    id: roboto_med
+    size: 30
+  - file: "fonts/icomoon.ttf"
+    id: icon_small
+    size: 55
+    glyphs:
+      - "\U0000E900" # cup-off
+      - "\U0000E901" # cup-empty
+      - "\U0000E902" # cup-one-quart
+      - "\U0000E903" # cup-half
+      - "\U0000E904" # cup-three-quart
+      - "\U0000E905" # cup-full
+  - file: "fonts/icomoon.ttf"
+    id: icon_big
+    size: 100
+    glyphs:
+      - "\U0000E900" # cup-off
+      - "\U0000E901" # cup-empty
+      - "\U0000E902" # cup-one-quart
+      - "\U0000E903" # cup-half
+      - "\U0000E904" # cup-three-quart
+      - "\U0000E905" # cup-full
+
+  - file: "fonts/icomoon.ttf"
+    id: progress
+    size: 35
+    glyphs:
+      - "\U0000E906" # progress-fill
+      - "\U0000E907" # progress-outline
+
+globals:
+  - id: menu_index
+    type: int
+    initial_value: '0'
+  - id: empty_weight
+    type: float
+    restore_value: yes
+    initial_value: '0'
+  - id: full_weight
+    type: float
+    restore_value: yes
+    initial_value: '0'
+  - id: settings_message
+    type: std::string
+  - id: daily_intake
+    type: float
+    restore_value: yes
+    initial_value: '0'
+  - id: cup_left_yesterday
+    type: bool
+    restore_value: yes
+    initial_value: 'false'
+  - id: previous_scale_value
+    type: float
+    restore_value: yes
+    initial_value: '0'
+  - id: clean_screen_state
+    type: int
+    initial_value: '0'
+  - id: current_cup
+    type: int
+    restore_value: yes
+    initial_value: '0'
+  - id: cup_level # 0=off 1=empty 2=one-quarter 3=half 4=three-quarters 5=full 6=over
+    type: int
+    initial_value: '0'
+  - id: num_cups # number of cups/containers to display
+    type: int
+    initial_value: '4'
+  - id: daily_goal # daily water goal intake in ml
+    type: float
+    initial_value: '2000'
+  - id: last_press # time of the last click. Used to re-refresh the screen when subsequent presses
+    type: int
+  - id: refresh_start # time the display refresh started
+    type: int
+
+sensor:
+  - platform: template
+    name: "Alejandro water intake"
+    device_class: "water"
+    state_class: "total_increasing"
+    unit_of_measurement: "ml"
+    lambda: 'return id(daily_intake);'
+    update_interval: 1h
+
+  - platform: hx711
+    id: scale
+    dout_pin: GPIO13
+    clk_pin: GPIO12
+    gain: 128
+    update_interval: 1s
+    unit_of_measurement: g
+    filters:
+      - calibrate_linear:
+          - -389956 -> 0
+          - -77391.00000 -> 660
+    on_value:
+      then:
+        - sensor.template.publish:
+            id: scale_object
+            state: !lambda 'return id(scale).state;'
+  - platform: template
+    id: scale_object
+    update_interval: 1s
+    filters:
+      - delta: 8
+      - debounce: 4s
+    on_value:
+      then:
+        - if:
+            condition:
+              lambda: 'return id(scale_object).state < (id(empty_weight) + 15);'
+            then: 
+              - if:
+                  condition:
+                    lambda: 'return id(scale_object).state < 20;'
+                  then:
+                    - logger.log: "No container."
+                    - globals.set:
+                        id: cup_level
+                        value: '0' # 0=off 1=empty 2=one-quarter 3=half 4=three-quarters 5=full 6=over   
+                  else:
+                    - logger.log: "Empty container."
+                    - globals.set:
+                        id: cup_level
+                        value: '1' # 0=off 1=empty 2=one-quarter 3=half 4=three-quarters 5=full 6=over
+                    - logger.log: "Empty container"
+                    - if:
+                        condition:
+                          lambda: 'return (id(scale_object).state + 10) < id(previous_scale_value);'
+                        then:
+                          - globals.set:
+                              id: daily_intake
+                              value: !lambda 'return id(daily_intake) + id(previous_scale_value) - id(scale_object).state;'
+                          - globals.set:
+                              id: previous_scale_value
+                              value: !lambda 'return id(scale_object).state;'  
+            else:
+              - if:
+                  condition:
+                    lambda: 'return id(scale_object).state > id(full_weight) + 100;'
+                  then:
+                    - logger.log: "Wrong container!? It weighs more than the full."
+                    - globals.set:
+                        id: cup_level
+                        value: '6' # 0=off 1=empty 2=one-quarter 3=half 4=three-quarters 5=full 6=over
+                  else:
+                    - logger.log: "Container has water."
+                    - globals.set:
+                        id: cup_level
+                        value: !lambda |-
+                          float per = (id(scale_object).state - id(empty_weight)) * 100 / (id(full_weight) - id(empty_weight));
+                          if (per <= 25) {
+                            return 2;
+                          } else if (per <= 50) {
+                            return 3;
+                          } else if (per <= 75) {
+                            return 4;
+                          } else {
+                            return 5;
+                          }
+                    - if:
+                        condition:
+                          lambda: 'return (id(scale_object).state + 10) < id(previous_scale_value);'
+                        then:
+                          - logger.log: "current < prev and container has water. Has drank some."
+                          - globals.set:
+                              id: daily_intake
+                              value: !lambda 'return id(daily_intake) + id(previous_scale_value) - id(scale_object).state;'
+                          - globals.set:
+                              id: previous_scale_value
+                              value: !lambda 'return id(scale_object).state;'
+                        else:
+                          - if:
+                              condition:
+                                lambda: 'return id(scale_object).state > (id(previous_scale_value) + 15);'
+                              then:
+                                - logger.log: "current > prev+15 and container has water. Refilled!"
+                                - globals.set:
+                                    id: daily_intake
+                                    value: !lambda |-
+                                      return id(daily_intake) + id(full_weight) - id(scale_object).state;
+                                - globals.set:
+                                    id: current_cup
+                                    value: !lambda |-
+                                      // If the cup is still there (cup_left_yesterday=true), keep it in the first cup slot
+                                      if (id(cup_left_yesterday)) {
+                                        id(cup_left_yesterday) = false;
+                                        return 0;
+                                      }
+
+                                      // If it is the first cup of the day (previous_scale_value=0), keep it in the first cup slot
+                                      if (id(previous_scale_value) == 0) {
+                                        return 0;
+                                      }
+
+                                      // After the first cup, then move to the next 
+                                      if (id(current_cup)+1 >= id(num_cups)) {
+                                        ESP_LOGW("custom", "Trying to drink more cups than configured. Will reuse the last one");
+                                        return id(current_cup);
+                                      } else {
+                                        return id(current_cup) + 1;
+                                      }
+                                - globals.set:
+                                    id: previous_scale_value
+                                    value: !lambda 'return id(scale_object).state;'
+        - component.update: my_display                             
+
+spi:
+  clk_pin: GPIO2
+  mosi_pin: GPIO15
+
+display:
+  - platform: waveshare_epaper
+    id: my_display
+    cs_pin: GPIO4
+    dc_pin: GPIO5
+    busy_pin: GPIO19
+    reset_pin: GPIO18
+    model: 4.20in
+    update_interval: never
+
+    pages:
+      - id: main_page
+        lambda: |-
+          #define xres 400
+          #define yres 300
+          
+          const char * const icons[] = {"\U0000E900", "\U0000E901", "\U0000E902", "\U0000E903",
+                                       "\U0000E904", "\U0000E905", "\U0000E900"};
+          int y = 0;
+          // Date
+          it.strftime(xres/2, y+10, id(roboto_small), TextAlign::TOP_CENTER, "%A %b %d %Y", id(ntp).now());
+
+          // Display cups
+          y+=43;
+          for (int i = 0; i < id(num_cups); i++) {
+            auto x = (xres/id(num_cups))/2 + (xres/id(num_cups)*i);
+            if (id(current_cup) == i) {
+              it.printf(x, y+30, id(icon_big), TextAlign::TOP_CENTER, icons[id(cup_level)]);
+              it.printf(x, y+131, id(roboto_small), TextAlign::TOP_CENTER, "%d", i+1);
+            } else if (id(current_cup) < i) {
+              it.printf(x, y+50, id(icon_small), TextAlign::TOP_CENTER, "\U0000E905");  // full
+              it.printf(x, y+110, id(roboto_small), TextAlign::TOP_CENTER, "%d", i+1);
+            } else {
+              it.printf(x, y+50, id(icon_small), TextAlign::TOP_CENTER, "\U0000E901");  // empty
+              it.printf(x, y+110, id(roboto_small), TextAlign::TOP_CENTER, "%d", i+1);
+            }
+          }
+
+          auto per = id(daily_intake) * 100 / id(daily_goal);
+          // Display daily intake
+          it.printf(xres/2, 215, id(roboto_med), TextAlign::TOP_CENTER, "%.0fml %.0f%%", id(daily_intake), per);
+
+          // Display the progress bar
+          for (int i = 0; i < 20; i++) {
+            auto x = ((xres-10)/20*(i+1)) - ((xres-10)/20)/2;
+            if (per <= i*100/20) {
+              it.printf(x+10, 253, id(progress), TextAlign::TOP_CENTER, "\U0000E907");  // progress-outline                           
+            } else {
+              it.printf(x+10, 253, id(progress), TextAlign::TOP_CENTER, "\U0000E906");  // progress-fill
+            }
+          }
+          
+      - id: settings_page
+        lambda: |-
+          int y = 0;          
+          ESP_LOGD("custom", "current menu index %d", id(menu_index));
+          if (id(menu_index) != -1) {
+            it.print(xres/2, y+5, id(roboto_small), TextAlign::TOP_CENTER, "SETTINGS");
+            it.filled_rectangle(xres/2-100, y+35, 200, 4);
+            y+=50;
+
+            // Display the menu options
+            if (id(menu_index) == 0) {
+              it.filled_rectangle(xres/2-150, y, 300, 30);
+              it.print(xres/2, y, id(roboto_small), COLOR_OFF, TextAlign::TOP_CENTER, "Set Empty Container");
+            } else {
+              it.print(xres/2, y, id(roboto_small), TextAlign::TOP_CENTER, "Set Empty Container");
+            }
+            y+=40;
+            if (id(menu_index) == 1) {
+              it.filled_rectangle(xres/2-150, y, 300, 30);
+              it.print(xres/2, y, id(roboto_small), COLOR_OFF, TextAlign::TOP_CENTER, "Set Full Container");
+            } else {
+              it.print(xres/2, y, id(roboto_small), TextAlign::TOP_CENTER, "Set Full Container");
+            }
+            y+=40;
+            if (id(menu_index) == 2) {
+              it.filled_rectangle(xres/2-150, y, 300, 30);
+              it.print(xres/2, y, id(roboto_small), COLOR_OFF, TextAlign::TOP_CENTER, "Clean Screen");
+            } else {
+              it.print(xres/2, y, id(roboto_small), TextAlign::TOP_CENTER, "Clean Screen");
+            }    
+            y+=40;
+            if (id(menu_index) == 3) {
+              it.filled_rectangle(xres/2-150, y, 300, 30);
+              it.print(xres/2, y, id(roboto_small), COLOR_OFF, TextAlign::TOP_CENTER, "Back");
+            } else {
+              it.print(xres/2, y, id(roboto_small), TextAlign::TOP_CENTER, "Back");
+            }      
+          } else {
+            // Display the message
+            it.print(xres/2, y+150, id(roboto_small), TextAlign::TOP_CENTER, id(settings_message).c_str());
+          }
+          y=260;
+          it.filled_rectangle(0, y, xres, 4);
+          it.printf(xres/2, y+5, id(roboto_small), TextAlign::TOP_CENTER, "Empty: %.0fg     Full: %.0fg", id(empty_weight), id(full_weight));
+
+      - id: clean_page
+        lambda: |-
+          if (id(clean_screen_state) == 0) {  
+            it.fill(COLOR_OFF);
+          } else {
+            it.fill(COLOR_ON);
+          }
+
+deep_sleep:
+  id: deep_sleep_1
