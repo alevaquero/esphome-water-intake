@@ -4,13 +4,17 @@ An ESPhome based scale to track your daily water intake. It measures the weight 
 
 ![water scale](/images/scale.jpg)
 
+## Why?
+
+I have a history of kidney stones, so need a motivation to drink more water.
+
 ## Usage
 
-Just place the container in the scale. It makes some assumptions though:
-* If the container has more water than before, it assumes you refilled it.
-* Once refilled, if the container is not full, it assumes you drank that water. So, always refill it to the top. 
+Just place the container in the scale while you drink over your day. It makes some assumptions though:
+* If the container has more water than before, it assumes you refilled it. The remaining water before the refill is not accounted to your daily intake.
+* Once refilled, if the container is not full, it assumes you drank the difference. So, always refill it to the top.
 * You can manually adjust the water intake in increments of 100ml pressing the "up" and "down" buttons.
-* Resets the daily intake at midnight.
+* The daily intake is reset at midnight. And the ESP32 goes to sleep until 6am.
 
 ## Setup
 
@@ -20,6 +24,7 @@ Press the "settings" button to enter the SETTINGS menu. Scroll (with the up/down
 
 By default it assumes the daily water intake goal is 2 liters. You can change it in the .yaml file.
 
+![settings](images/settings.jpg)
 ## Build
 
 List of Material:
